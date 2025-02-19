@@ -2,7 +2,6 @@
 aitask/
 agent.py
 aiagent.py
-aicontentcreator.py
 content.py
 import.py
 joe.py
