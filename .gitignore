@@ -1,7 +1,6 @@
 .env
 aitask/
 agent.py
-aiagent.py
 content.py
 import.py
 joe.py
