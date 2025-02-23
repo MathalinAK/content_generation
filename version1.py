@@ -1,172 +1,220 @@
 import os
 import feedparser
+import autogen
 from dotenv import load_dotenv
-import google.generativeai as genai
-from typing import List
 import streamlit as st
+from typing import List
 
-# Load environment variables
+os.environ["AUTOGEN_USE_DOCKER"] = "False"
+
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Configure Gemini Pro
-genai.configure(api_key=GOOGLE_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-pro')
+config_list = [
+    {
+        "model": "gemini-pro",
+        "api_type": "google",
+        "api_key": GOOGLE_API_KEY,
+    }
+]
 
-# Define a function to interact with Gemini Pro
-def generate_with_gemini(prompt: str) -> str:
-    response = gemini_model.generate_content(prompt)
-    return response.text
+llm_config = {"config_list": config_list, "code_execution_config": {"use_docker": False}}
 
-class NewsItem:
+class TopicsItem:
     def __init__(self, title, category):
         self.title = title
         self.category = category
 
-# Fetch news articles
-def get_news_by_category(category: str, num_articles: int = 5) -> List[NewsItem]:
-    query = category if category != "others" else st.session_state.get("user_input", "")
-    rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+def getgoogletopics_by_category(category: str, num_articles: int = 5) -> List[TopicsItem]:
+    rss_url = f"https://news.google.com/rss/search?q={category}&gl=GB"
     feed = feedparser.parse(rss_url)
-    return [NewsItem(title=entry.title, category=category) for entry in feed.entries[:num_articles]]
+    return [TopicsItem(title=entry.title, category=category) for entry in feed.entries[:num_articles]]
 
-class Agent:
-    def __init__(self, name, system_prompt):
-        self.name = name
-        self.system_prompt = system_prompt
+def get_relevant_topics(query: str, num_articles: int = 5) -> List[TopicsItem]:
+    rss_url = f"https://news.google.com/rss/search?q={query}&gl=GB"
+    feed = feedparser.parse(rss_url)
+    return [TopicsItem(title=entry.title, category="others") for entry in feed.entries[:num_articles]]
 
-    def generate_response(self, prompt: str) -> str:
-        full_prompt = f"{self.system_prompt}\n\n{prompt}"
-        return generate_with_gemini(full_prompt)
-
-# Initialize agents
-writer = Agent(
+writer = autogen.AssistantAgent(
     name="Writer",
-    system_prompt="You are a writer who creates engaging and informative content. "
-                  "You analyze news articles and create detailed, well-structured content. "
-                  "You must polish your writing based on feedback and provide refined versions.",
+    llm_config=llm_config,
+    system_message="You generate high-quality content based on the given topic."
 )
 
-seo_reviewer = Agent(
-    name="SEOReviewer",
-    system_prompt="You are an SEO expert who reviews content for search optimization. "
-                  "Provide concise, actionable feedback in 3 bullet points about keyword usage, "
-                  "structure, and visibility. Begin with 'SEO Review:'",
+seo_reviewer = autogen.AssistantAgent(
+    name="SEO Reviewer",
+    llm_config=llm_config,
+    system_message="Provide three key SEO recommendations to improve keyword placement, readability, and ranking potential. Do NOT rewrite content."
 )
 
-style_reviewer = Agent(
-    name="StyleReviewer",
-    system_prompt="You are a writing style expert who reviews content for clarity and engagement. "
-                  "Provide concise, actionable feedback in 3 bullet points about tone, flow, and clarity. "
-                  "Begin with 'Style Review:'",
+ethics_reviewer = autogen.AssistantAgent(
+    name="Ethics Reviewer",
+    llm_config=llm_config,
+    system_message="Identify potential bias, fairness, and transparency concerns in content. Do NOT rewrite content."
 )
 
-legal_reviewer = Agent(
-    name="LegalReviewer",
-    system_prompt="You are a legal expert who reviews content for compliance and potential issues. "
-                  "Provide concise, actionable feedback in 3 bullet points about legal concerns. "
-                  "Begin with 'Legal Review:'",
-)
+def evaluate_content(content: str, aspect: str) -> float:
+    eval_prompt = f"Evaluate the {aspect} of the following content on a scale of 0 to 100. Return only the number:\n\n{content}"
+    score_response = writer.generate_reply(messages=[{"role": "user", "content": eval_prompt}])
+    score = score_response.get("content") or score_response["choices"][0]["message"]["content"]
+    try:
+        return float(score.strip())
+    except ValueError:
+        return 50.0  
 
-meta_reviewer = Agent(
-    name="MetaReviewer",
-    system_prompt="You are a meta reviewer who aggregates feedback from other reviewers "
-                  "and provides final, actionable recommendations for improvement. "
-                  "Begin with 'Final Recommendations:'",
-)
+def get_feedback(content: str) -> str:
+    relevance_score = evaluate_content(content, "relevance to topic")
+    engagement_score = evaluate_content(content, "clarity and engagement")
+    ethics_score = evaluate_content(content, "ethical integrity")
+    overall_score = (relevance_score + engagement_score + ethics_score) / 3  
+
+    seo_feedback = seo_reviewer.generate_reply(
+        messages=[{"role": "user", "content": f"Give SEO feedback in 1-2 sentences:\n\n{content}"}]
+    )["content"]
+
+    ethics_feedback = ethics_reviewer.generate_reply(
+        messages=[{"role": "user", "content": f"Give Ethics feedback in 1-2 sentences:\n\n{content}"}]
+    )["content"]
+
+    evaluation_table = f"""
+    **Evaluation Scores:**
+
+    | Evaluation Criteria        | Score  | Explanation                                   |
+    |-------------------------|--------|-------------|  
+    | **Relevance to Topic**   | {relevance_score}%  | Alignment with the given topic or prompt. |  
+    | **Clarity & Engagement** | {engagement_score}%  | Audience engagement and clarity. |  
+    | **Ethical Considerations** | {ethics_score}%  | Compliance with fairness and transparency. |  
+    | **Overall Content Quality** | {overall_score}%  | Composite assessment of structure and effectiveness. |
+
+    **SEO Recommendations:**
+    {seo_feedback}
+
+    **Ethical Review Comments:**
+    {ethics_feedback}
+    """
+
+    return evaluation_table  
+
+def generate_high_quality_content(topic: str):
+    attempt = 0
+    past_attempts = []
+    best_content = ""
+    best_score = 0
+    content = ""  
+    max_attempts = 3  
+
+    while attempt < max_attempts:
+        st.write(f"### Attempt {attempt + 1}:")
+        if attempt > 0:
+            refinement_prompt = f"""
+            Improve the following content by addressing these key points:
+            - Increase relevance to "{topic}".
+            - Improve clarity and engagement by refining the structure.
+            - Address ethical concerns by ensuring fairness, balance, and transparency.
+
+            Content:
+            {content}
+
+            Feedback:
+            {feedback}
+            """
+            content_response = writer.generate_reply(messages=[{"role": "user", "content": refinement_prompt}])
+        else:
+            content_response = writer.generate_reply(
+                messages=[{"role": "user", "content": f"Write a detailed and engaging blog post about: {topic}"}]
+            )
+
+        content = content_response.get("content")
+
+        if not content:
+            st.error("Failed to generate content. Please check your API key or quota.")
+            return "", "", 0
+        if content in past_attempts:
+            st.warning("The AI is repeating itself. Adjusting the prompt for better results.")
+            continue
+        past_attempts.append(content)
+
+        relevance_score = evaluate_content(content, "relevance to topic")
+        engagement_score = evaluate_content(content, "clarity and engagement")
+        ethics_score = evaluate_content(content, "ethical integrity")
+        overall_score = (relevance_score + engagement_score + ethics_score) / 3  
+
+        if attempt < 2:
+            feedback = get_feedback(content)
+        else:
+            feedback = "Final version: No further feedback required."
+
+        st.write("---")  
+        st.subheader(f"Generated Content (Attempt {attempt + 1})")
+        st.markdown(content, unsafe_allow_html=True)
+        st.write("---")  
+
+        st.subheader("Quality Score")
+        st.write(f"**Score: {overall_score:.2f}%**")  
+
+        st.divider()
+
+        st.subheader("Evaluation & Feedback")
+        st.write(feedback)  
+
+        st.write("---")  
+
+        if overall_score > best_score:
+            best_content = content
+            best_score = overall_score
+
+        if overall_score >= 95:
+            break  
+
+        attempt += 1  
+
+    st.toast("Max attempts reached.")
+    return best_content, best_score  
 
 def main():
-    st.title("AI Content Generator with Feedback Loop")
-
-    if not GOOGLE_API_KEY:
-        st.error("Missing GOOGLE_API_KEY in .env file")
-        return
-
-    if 'generation_count' not in st.session_state:
-        st.session_state.generation_count = 0
-    if 'iterations' not in st.session_state:
-        st.session_state.iterations = []
+    st.title("AI-Powered Content Evaluator")
+    categories = ["Technology", "Sports", "Business", "Entertainment", "Tourism", "Others"]
 
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        st.subheader("Select Topic")
-        categories = ["Technology", "Business", "Entertainment", "Sports", "others"]
-        selected_category = st.radio("Category:", categories)
+        selected_category = st.radio("Select a category:", categories)
+        user_input = None
 
-        if selected_category == "others":
-            user_input = st.text_input("Enter topic:")
-            if user_input:
-                st.session_state.user_input = user_input
+        if selected_category == "Others":
+            user_input = st.text_input("Enter a custom topic:")
 
-    if selected_category:
-        with st.spinner("Fetching news..."):
-            news_items = get_news_by_category(selected_category)
+        if st.button("Fetch Topics"):
+            category_query = user_input if selected_category == "Others" else selected_category
 
-        with col2:
-            st.subheader("Select Article")
-            if news_items:
-                selected_title = st.radio(
-                    "Choose an article:",
-                    [item.title for item in news_items]
-                )
+            with st.spinner(f"Fetching {category_query} topics..."):
+                if selected_category == "Others" and user_input:
+                    topics_items = get_relevant_topics(user_input)
+                else:
+                    topics_items = getgoogletopics_by_category(selected_category)
 
-                if selected_title:
-                    selected_news = next(
-                        (item for item in news_items if item.title == selected_title),
-                        None
-                    )
+            if not topics_items:
+                st.write("No topics found.")
+                return
 
-                    if selected_news:
-                        if st.button("Generate & Refine Content"):
-                            with st.spinner("Generating content and reviews..."):
-                                st.session_state.iterations = []
-                                content = writer.generate_response(f"Write a detailed article about: {selected_news.title}")
+            st.session_state.topics_items = topics_items
 
-                                for i in range(3):
-                                    reviews = {
-                                        "SEOReviewer": seo_reviewer.generate_response(content),
-                                        "StyleReviewer": style_reviewer.generate_response(content),
-                                        "LegalReviewer": legal_reviewer.generate_response(content),
-                                    }
+    with col2:
+        if 'topics_items' in st.session_state:
+            topics_titles = [item.title for item in st.session_state.topics_items]
+            selected_title = st.radio("Select an article:", topics_titles)
+            st.session_state.selected_topics = next(item for item in st.session_state.topics_items if item.title == selected_title)
 
-                                    reviews_summary = "\n".join(reviews.values())
-                                    final_recommendations = meta_reviewer.generate_response(
-                                        f"Aggregate the following reviews and provide final recommendations:\n\n{reviews_summary}"
-                                    )
+    if 'selected_topics' in st.session_state:
+        selected_topics = st.session_state.selected_topics
 
-                                    st.session_state.iterations.append({
-                                        'content': content,
-                                        'reviews': reviews,
-                                        'final_recommendations': final_recommendations
-                                    })
+        with st.spinner("Generating content..."):
+            high_quality_content, score = generate_high_quality_content(selected_topics.title)
 
-                                    refinement_prompt = (
-                                        f"Refine the following content based on these final recommendations:\n\n"
-                                        f"Content:\n{content}\n\n"
-                                        f"Final Recommendations:\n{final_recommendations}\n\n"
-                                        "Please produce a polished and improved version of the content."
-                                    )
-                                    content = writer.generate_response(refinement_prompt)
-
-                                    st.session_state.generation_count += 1
-
-    if 'iterations' in st.session_state:
-        for i, iteration in enumerate(st.session_state.iterations):
-            st.subheader(f"Generated Content - Iteration {i + 1}")
-            st.write(iteration['content'])
-
-            with st.expander(f"View Feedback for Iteration {i + 1}", expanded=True):
-                st.markdown("### Reviews and Recommendations")
-                for reviewer, review in iteration['reviews'].items():
-                    st.markdown(f"**{reviewer}**")
-                    st.write(review)
-
-                st.markdown("### Final Recommendations")
-                st.write(iteration['final_recommendations'])
-
-        if st.session_state.generation_count >= 3:
-            st.warning("Maximum refinement iterations reached (3).")
+        st.subheader("Final Content (After Evaluation & Refinement)")
+        st.markdown(high_quality_content, unsafe_allow_html=True)
+        st.subheader("Final Quality Score")
+        st.write(f"**Score: {score}%**")
 
 if __name__ == "__main__":
     main()
