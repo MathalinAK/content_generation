@@ -39,8 +39,8 @@ def get_relevant_topics(query: str, num_articles: int = 5) -> List[TopicsItem]:
 def get_google_trends():
     try:
         pytrends = TrendReq(hl="en-US", tz=360)
-        time.sleep(1)  # Avoid making rapid requests
-        trending_searches = pytrends.trending_searches().head(5)  # Get top 5 trending topics
+        time.sleep(1) 
+        trending_searches = pytrends.trending_searches().head(5) 
         return trending_searches[0].tolist()
     except Exception as e:
         return ["Error fetching trends: " + str(e)]
@@ -167,59 +167,9 @@ def generate_high_quality_content(topic: str):
     st.toast("Max attempts reached.")
     return best_content, best_score  
 
-# def main():
-#     st.title("AI-Powered Content Evaluator")
-#     categories = ["Technology", "Sports", "Business", "Entertainment", "Tourism", "Others"]
-
-#     col1, col2 = st.columns([1, 2])
-
-#     with col1:
-#         selected_category = st.radio("Select a category:", categories)
-#         user_input = None
-
-#         if selected_category == "Others":
-#             user_input = st.text_input("Enter a custom topic:")
-
-#         if st.button("Fetch Topics"):
-#             category_query = user_input if selected_category == "Others" else selected_category
-
-#             with st.spinner(f"Fetching {category_query} topics..."):
-#                 if selected_category == "Others" and user_input:
-#                     topics_items = get_relevant_topics(user_input)
-#                 else:
-#                     topics_items = getgoogletopics_by_category(selected_category)
-            
-            
-
-#             if not topics_items:
-#                 st.write("No topics found.")
-#                 return
-
-#             st.session_state.topics_items = topics_items
-
-#     with col2:
-#         if 'topics_items' in st.session_state:
-#             topics_titles = [item.title for item in st.session_state.topics_items]
-#             selected_title = st.radio("Select an article:", topics_titles)
-#             st.session_state.selected_topics = next(item for item in st.session_state.topics_items if item.title == selected_title)
-
-#     if 'selected_topics' in st.session_state:
-#         selected_topics = st.session_state.selected_topics
-
-#         with st.spinner("Generating content..."):
-#             high_quality_content, score = generate_high_quality_content(selected_topics.title)
-
-#         st.subheader("Final Content (After Evaluation & Refinement)")
-#         st.markdown(high_quality_content, unsafe_allow_html=True)
-#         st.subheader("Final Quality Score")
-#         st.write(f"**Score: {score}%**")
 def main():
     st.title("AI-Powered Content Evaluator")
-
-    # Fetch trending topics from Google Trends
     trending_topics = get_google_trends()
-
-    # Categories for article selection
     categories = ["Technology", "Sports", "Business", "Entertainment", "Tourism", "Others", "Trending Topics"]
 
     col1, col2 = st.columns([1, 2])
@@ -241,9 +191,8 @@ def main():
             with st.spinner(f"Fetching {category_query} topics..."):
                 if selected_category == "Others" and user_input:
                     topics_items = get_relevant_topics(user_input)
-                elif selected_category == "Trending Topics":
-                    # Get topics from Google Trends and treat them as "Others" if user selects "Trending Topics"
-                    topics_items = get_relevant_topics(trending_topics[0])  # Fetch articles for the top trending topic
+                elif selected_category == "Trending Topics": 
+                    topics_items = get_relevant_topics(trending_topics[0]) 
                 else:
                     topics_items = getgoogletopics_by_category(selected_category)
             
